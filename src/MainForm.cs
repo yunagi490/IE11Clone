@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -10,7 +11,7 @@ namespace IE11Clone;
 public class MainForm : Form
 {
     private const string HomePage = "https://www.bing.com";
-    private const string NewTabPlusKey = "__newtab__";
+    private const string DefaultFavoriteFolder = "Favorites";
     private const int CloseButtonSize = 16;
 
     private readonly MenuStrip _menuStrip = new();
@@ -26,6 +27,7 @@ public class MainForm : Form
     private ToolStripButton _btnHome = null!;
     private ToolStripComboBox _addressBar = null!;
     private ToolStripButton _btnGo = null!;
+    private Button _btnNewTab = null!;
 
     private ToolStripMenuItem _favoritesMenu = null!;
     private ToolStripStatusLabel _statusLabel = null!;
@@ -33,7 +35,13 @@ public class MainForm : Form
     private ToolStripStatusLabel _zoomLabel = null!;
     private ToolStripProgressBar _progressBar = null!;
 
-    private readonly List<(string Title, string Url)> _favorites = new();
+    // アイコン用画像 (お気に入りツリー)。"default"=汎用地球儀, "folder"=フォルダー、
+    // それ以外はホスト名をキーに取得したファビコン。
+    private readonly ImageList _favIconList = new();
+    private readonly HttpClient _httpClient = new();
+
+    private readonly List<string> _favoriteFolders = new() { DefaultFavoriteFolder };
+    private readonly List<(string Title, string Url, string Folder)> _favorites = new();
 
     // --- お気に入りセンター(サイドパネル) ---
     private Panel _favoritesPanel = null!;
@@ -62,6 +70,7 @@ public class MainForm : Form
 
         ToolStripManager.Renderer = new ToolStripProfessionalRenderer(new Ie11ColorTable());
 
+        BuildFavIconList();
         BuildMenuStrip();
         BuildNavToolStrip();
         BuildFavoritesBar();
@@ -81,7 +90,7 @@ public class MainForm : Form
         Controls.Add(_menuStrip);
         MainMenuStrip = _menuStrip;
 
-        Load += (s, e) => UpdateAddressBarWidth();
+        Load += (s, e) => RepositionNewTabButton();
         _navToolStrip.SizeChanged += (s, e) => UpdateAddressBarWidth();
 
         // 本家 IE11 のお気に入りセンター初期状態(Bing/Google)を再現
@@ -89,6 +98,80 @@ public class MainForm : Form
         AddFavorite("Google", "https://www.google.com");
 
         AddNewTab(HomePage);
+    }
+
+    // ============================================================
+    //  アイコン (お気に入りツリー用)
+    // ============================================================
+    private void BuildFavIconList()
+    {
+        _favIconList.ImageSize = new Size(16, 16);
+        _favIconList.ColorDepth = ColorDepth.Depth32Bit;
+        _favIconList.Images.Add("default", CreateGlobeIcon());
+        _favIconList.Images.Add("folder", CreateFolderIcon());
+    }
+
+    private static Bitmap CreateGlobeIcon()
+    {
+        var bmp = new Bitmap(16, 16);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.Clear(Color.Transparent);
+        using (var brush = new SolidBrush(Color.FromArgb(90, 130, 180)))
+            g.FillEllipse(brush, 1, 1, 14, 14);
+        using (var pen = new Pen(Color.White, 1f))
+        {
+            g.DrawEllipse(pen, 4, 1, 8, 14);
+            g.DrawLine(pen, 1, 8, 15, 8);
+        }
+        return bmp;
+    }
+
+    private static Bitmap CreateFolderIcon()
+    {
+        var bmp = new Bitmap(16, 16);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.Clear(Color.Transparent);
+        using (var tab = new SolidBrush(Color.FromArgb(255, 220, 130)))
+            g.FillRectangle(tab, 1, 3, 6, 3);
+        using (var body = new SolidBrush(Color.FromArgb(255, 205, 90)))
+            g.FillRectangle(body, 1, 5, 14, 9);
+        using (var pen = new Pen(Color.FromArgb(200, 150, 40)))
+            g.DrawRectangle(pen, 1, 5, 13, 8);
+        return bmp;
+    }
+
+    /// <summary>指定 URL のファビコンを取得して ImageList に登録し、そのキーを返す(失敗時は "default")。</summary>
+    private async Task<string> EnsureFaviconAsync(string url)
+    {
+        try
+        {
+            var host = new Uri(url).Host;
+            if (_favIconList.Images.ContainsKey(host)) return host;
+
+            string faviconUrl = $"https://www.google.com/s2/favicons?sz=32&domain={host}";
+            var bytes = await _httpClient.GetByteArrayAsync(faviconUrl);
+            using var ms = new MemoryStream(bytes);
+            using var src = new Bitmap(ms);
+            var resized = new Bitmap(src, new Size(16, 16));
+            _favIconList.Images.Add(host, resized);
+            return host;
+        }
+        catch
+        {
+            return "default";
+        }
+    }
+
+    private async void LoadFaviconIntoNodeAsync(TreeNode node, string url)
+    {
+        string key = await EnsureFaviconAsync(url);
+        if (node.TreeView != null)
+        {
+            node.ImageKey = key;
+            node.SelectedImageKey = key;
+        }
     }
 
     // ============================================================
@@ -194,15 +277,22 @@ public class MainForm : Form
     {
         var webView = GetActiveWebView();
         if (webView?.CoreWebView2 == null || webView.Source == null) return;
-        var title = string.IsNullOrWhiteSpace(webView.CoreWebView2.DocumentTitle)
+        var defaultTitle = string.IsNullOrWhiteSpace(webView.CoreWebView2.DocumentTitle)
             ? webView.Source.ToString()
             : webView.CoreWebView2.DocumentTitle;
-        AddFavorite(title, webView.Source.ToString());
+
+        using var dialog = new AddFavoriteDialog(defaultTitle, _favoriteFolders);
+        if (dialog.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.FavoriteName))
+        {
+            AddFavorite(dialog.FavoriteName, webView.Source.ToString(), dialog.SelectedFolder);
+        }
     }
 
-    private void AddFavorite(string title, string url)
+    private void AddFavorite(string title, string url, string folder = DefaultFavoriteFolder)
     {
-        _favorites.Add((title, url));
+        if (string.IsNullOrWhiteSpace(folder)) folder = DefaultFavoriteFolder;
+        if (!_favoriteFolders.Contains(folder)) _favoriteFolders.Add(folder);
+        _favorites.Add((title, url, folder));
 
         var menuItem = new ToolStripMenuItem(title);
         menuItem.Click += (s, e) => Navigate(url);
@@ -316,6 +406,7 @@ public class MainForm : Form
     {
         _favoritesPanel.Visible = !_favoritesPanel.Visible;
         if (_favoritesPanel.Visible) RefreshFavoritesTree();
+        RepositionNewTabButton();
     }
 
     private void BuildFavoritesCenterPanel()
@@ -349,7 +440,7 @@ public class MainForm : Form
             ToolTipText = "閉じる",
         };
         closeBtn.Click += (s, e) => _favoritesPanel.Visible = false;
-        topStrip.Items.Add(addFavDropDown);
+                topStrip.Items.Add(addFavDropDown);
         topStrip.Items.Add(closeBtn);
 
         // 中段: お気に入り / フィード / 履歴 の擬似タブ
@@ -362,7 +453,7 @@ public class MainForm : Form
         tabStripPanel.Controls.Add(tabFlow);
 
         // 下段: コンテンツ(お気に入りツリー/フィード プレースホルダー/履歴リスト)
-        _favoritesTree = new TreeView { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, Visible = true };
+        _favoritesTree = new TreeView { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, Visible = true, ImageList = _favIconList };
         _favoritesTree.NodeMouseClick += (s, e) =>
         {
             if (e.Node?.Tag is string url) Navigate(url);
@@ -398,6 +489,7 @@ public class MainForm : Form
 
         SelectFavoritesTab(_tabFav);
         RefreshFavoritesTree();
+        RepositionNewTabButton();
     }
 
     private Label CreateFavTabLabel(string text)
@@ -434,13 +526,31 @@ public class MainForm : Form
     {
         if (_favoritesTree == null) return;
         _favoritesTree.Nodes.Clear();
-        // 本家 IE11 のお気に入りセンターに合わせ、Links / リンク フォルダーを先頭に置き、
-        // 追加したお気に入りはその後にフラットな一覧として並べる。
-        _favoritesTree.Nodes.Add(new TreeNode("Links"));
-        _favoritesTree.Nodes.Add(new TreeNode("リンク"));
-        foreach (var fav in _favorites)
+
+        // 本家 IE11 の既定フォルダー(Links/リンク)を先頭に表示
+        _favoritesTree.Nodes.Add(new TreeNode("Links") { ImageKey = "folder", SelectedImageKey = "folder" });
+        _favoritesTree.Nodes.Add(new TreeNode("リンク") { ImageKey = "folder", SelectedImageKey = "folder" });
+
+        // 既定フォルダー(Favorites)の項目はルート直下にフラットに表示(本家の挙動と同じ)
+        foreach (var fav in _favorites.Where(f => f.Folder == DefaultFavoriteFolder))
         {
-            _favoritesTree.Nodes.Add(new TreeNode(fav.Title) { Tag = fav.Url });
+            var node = new TreeNode(fav.Title) { Tag = fav.Url, ImageKey = "default", SelectedImageKey = "default" };
+            _favoritesTree.Nodes.Add(node);
+            LoadFaviconIntoNodeAsync(node, fav.Url);
+        }
+
+        // 「新規フォルダー」で作成したフォルダーはサブフォルダーとして表示
+        foreach (var folderName in _favoriteFolders.Where(f => f != DefaultFavoriteFolder))
+        {
+            var folderNode = new TreeNode(folderName) { ImageKey = "folder", SelectedImageKey = "folder" };
+            foreach (var fav in _favorites.Where(f => f.Folder == folderName))
+            {
+                var node = new TreeNode(fav.Title) { Tag = fav.Url, ImageKey = "default", SelectedImageKey = "default" };
+                folderNode.Nodes.Add(node);
+                LoadFaviconIntoNodeAsync(node, fav.Url);
+            }
+            _favoritesTree.Nodes.Add(folderNode);
+            folderNode.Expand();
         }
     }
 
@@ -466,20 +576,57 @@ public class MainForm : Form
         _tabControl.Padding = new Point(10, 4);
         _tabControl.HotTrack = true;
 
-        var plusTab = new TabPage("+") { Name = NewTabPlusKey };
-        _tabControl.TabPages.Add(plusTab);
-
         _tabControl.DrawItem += TabControl_DrawItem;
         _tabControl.MouseDown += TabControl_MouseDown;
-        _tabControl.Selecting += TabControl_Selecting;
         _tabControl.SelectedIndexChanged += TabControl_SelectedIndexChanged;
+        _tabControl.Resize += (s, e) => RepositionNewTabButton();
+
+        // 「新しいタブ」ボタンは TabPage ではなく、タブ帯の上に浮かせた小さな Button として実装
+        // (TabPage として扱うと OS 側のタブ幅計算で意図せず大きく描画されてしまう問題があったため)
+        _btnNewTab = new Button
+        {
+            Text = "+",
+            Font = new Font("Segoe UI", 11f, FontStyle.Bold),
+            FlatStyle = FlatStyle.Flat,
+            Size = new Size(28, 24),
+            BackColor = Color.FromArgb(224, 234, 248),
+            TabStop = false,
+            Cursor = Cursors.Hand,
+        };
+        _btnNewTab.FlatAppearance.BorderColor = Color.FromArgb(163, 189, 221);
+        _btnNewTab.Click += (s, e) => AddNewTab(HomePage);
+        // 注意: TabControl.Controls は TabPage しか受け付けないため(他の型を Add すると
+        // ArgumentException になる)、ボタンは TabControl ではなくフォーム自身の子として追加し、
+        // 画面上の見た目だけタブ帯の右端に重ねて表示する。
+        Controls.Add(_btnNewTab);
+        RepositionNewTabButton();
+    }
+
+    private void RepositionNewTabButton()
+    {
+        if (_btnNewTab == null) return;
+        Point localPoint = _tabControl.TabCount == 0
+            ? new Point(6, 3)
+            : GetPointAfterLastTab();
+
+        // _tabControl 上のローカル座標をフォームのクライアント座標に変換する。
+        // お気に入りセンターの表示/非表示で _tabControl の位置が動いても追従できるように、
+        // 固定オフセットではなく都度 Screen 座標経由で変換する。
+        var screenPoint = _tabControl.PointToScreen(localPoint);
+        _btnNewTab.Location = PointToClient(screenPoint);
+        _btnNewTab.BringToFront();
+    }
+
+    private Point GetPointAfterLastTab()
+    {
+        var lastRect = _tabControl.GetTabRect(_tabControl.TabCount - 1);
+        return new Point(lastRect.Right + 4, lastRect.Top + (lastRect.Height - _btnNewTab.Height) / 2);
     }
 
     private void TabControl_DrawItem(object? sender, DrawItemEventArgs e)
     {
         var tabPage = _tabControl.TabPages[e.Index];
         var rect = _tabControl.GetTabRect(e.Index);
-        bool isPlus = tabPage.Name == NewTabPlusKey;
         bool isSelected = e.Index == _tabControl.SelectedIndex;
 
         Color back = isSelected ? Color.White : Color.FromArgb(214, 228, 246);
@@ -490,13 +637,6 @@ public class MainForm : Form
             e.Graphics.DrawLine(pen, rect.Left, rect.Top, rect.Right, rect.Top);
             e.Graphics.DrawLine(pen, rect.Left, rect.Top, rect.Left, rect.Bottom);
             e.Graphics.DrawLine(pen, rect.Right - 1, rect.Top, rect.Right - 1, rect.Bottom);
-        }
-
-        if (isPlus)
-        {
-            TextRenderer.DrawText(e.Graphics, "+", new Font("Segoe UI", 12f, FontStyle.Bold), rect,
-                Color.FromArgb(70, 70, 70), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            return;
         }
 
         var iconRect = new Rectangle(rect.Left + 8, rect.Top + (rect.Height - 16) / 2, 16, 16);
@@ -525,22 +665,11 @@ public class MainForm : Form
     {
         for (int i = 0; i < _tabControl.TabCount; i++)
         {
-            var tabPage = _tabControl.TabPages[i];
-            if (tabPage.Name == NewTabPlusKey) continue;
             if (GetCloseButtonRect(i).Contains(e.Location))
             {
-                CloseTab(tabPage);
+                CloseTab(_tabControl.TabPages[i]);
                 return;
             }
-        }
-    }
-
-    private void TabControl_Selecting(object? sender, TabControlCancelEventArgs e)
-    {
-        if (e.TabPage?.Name == NewTabPlusKey)
-        {
-            e.Cancel = true;
-            AddNewTab(HomePage);
         }
     }
 
@@ -566,10 +695,9 @@ public class MainForm : Form
         var tabPage = new TabPage("新しいタブ") { Tag = webView };
         tabPage.Controls.Add(webView);
 
-        int insertIndex = _tabControl.TabPages.IndexOfKey(NewTabPlusKey);
-        if (insertIndex < 0) insertIndex = _tabControl.TabCount;
-        _tabControl.TabPages.Insert(insertIndex, tabPage);
+        _tabControl.TabPages.Add(tabPage);
         _tabControl.SelectedTab = tabPage;
+        RepositionNewTabButton();
 
         try
         {
@@ -603,8 +731,7 @@ public class MainForm : Form
 
     private void CloseTab(TabPage tabPage)
     {
-        if (tabPage.Name == NewTabPlusKey) return;
-        if (RealTabCount() <= 1) return; // 最後の1枚は閉じない
+        if (_tabControl.TabCount <= 1) return; // 最後の1枚は閉じない
 
         int idx = _tabControl.TabPages.IndexOf(tabPage);
         bool wasSelected = _tabControl.SelectedTab == tabPage;
@@ -613,14 +740,13 @@ public class MainForm : Form
         if (tabPage.Tag is WebView2 wv) wv.Dispose();
         tabPage.Dispose();
 
-        if (wasSelected)
+        if (wasSelected && _tabControl.TabCount > 0)
         {
-            int newIndex = Math.Min(idx, RealTabCount() - 1);
+            int newIndex = Math.Min(idx, _tabControl.TabCount - 1);
             _tabControl.SelectedIndex = Math.Max(0, newIndex);
         }
+        RepositionNewTabButton();
     }
-
-    private int RealTabCount() => _tabControl.TabPages.Cast<TabPage>().Count(t => t.Name != NewTabPlusKey);
 
     private WebView2? GetActiveWebView() => _tabControl.SelectedTab?.Tag as WebView2;
 

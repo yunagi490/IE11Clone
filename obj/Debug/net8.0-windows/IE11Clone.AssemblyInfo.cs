@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("IE11Clone")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("11.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("11.0.0.0+ad85fe05f3e38d5ef009945debc8d15d01e08fbe")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("11.0.0.0+c68273bd106b64d8c97853a1e18701012fc2c293")]
 [assembly: System.Reflection.AssemblyProductAttribute("IE11Clone")]
 [assembly: System.Reflection.AssemblyTitleAttribute("IE11Clone")]
 [assembly: System.Reflection.AssemblyVersionAttribute("11.0.0.0")]
