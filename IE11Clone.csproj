@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>IE11Clone</AssemblyName>
+    <RootNamespace>IE11Clone</RootNamespace>
+    <Version>11.0.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WebView2 (Chromium) ランタイム用パッケージ -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Asserts\" />
+  </ItemGroup>
+
+</Project>
