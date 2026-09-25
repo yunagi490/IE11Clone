@@ -1,8 +1,5 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
-using System.Drawing;
-using System.IO;
-using System.Windows.Forms;
 
 namespace IE11Clone;
 
@@ -38,6 +35,22 @@ public class MainForm : Form
 
     private readonly List<(string Title, string Url)> _favorites = new();
 
+    // --- お気に入りセンター(サイドパネル) ---
+    private Panel _favoritesPanel = null!;
+    private TreeView _favoritesTree = null!;
+    private Panel _feedsPanel = null!;
+    private Panel _historyPanel = null!;
+    private ListBox _historyListBox = null!;
+    private Label _tabFav = null!;
+    private Label _tabFeeds = null!;
+    private Label _tabHistory = null!;
+    private readonly List<HistoryEntry> _history = new();
+
+    private sealed record HistoryEntry(string Title, string Url)
+    {
+        public override string ToString() => Title;
+    }
+
     public MainForm()
     {
         Text = "使用したことのないページ - Internet Explorer";
@@ -46,19 +59,22 @@ public class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9f);
         KeyPreview = true;
-        
 
         ToolStripManager.Renderer = new ToolStripProfessionalRenderer(new Ie11ColorTable());
 
         BuildMenuStrip();
         BuildNavToolStrip();
         BuildFavoritesBar();
+        BuildFavoritesCenterPanel();
         BuildTabControl();
         BuildStatusStrip();
 
-        // Dock 順序: Fill を先に追加し、Top/Bottom は後から追加することで
-        // メニュー→ナビゲーション→お気に入りバー→(中身)→ステータスバー の順に積み上がる
+        // Dock 順序: Fill(中身)→左パネル→下→上...の順で追加すると、
+        // 後から追加したものほど優先的に端を確保するため、
+        // メニュー/ナビゲーション/お気に入りバーが全幅の帯として最上部に並び、
+        // お気に入りセンターはその下・ステータスバーの上の範囲だけを左側から確保する。
         Controls.Add(_tabControl);
+        Controls.Add(_favoritesPanel);
         Controls.Add(_statusStrip);
         Controls.Add(_favoritesBar);
         Controls.Add(_navToolStrip);
@@ -67,6 +83,10 @@ public class MainForm : Form
 
         Load += (s, e) => UpdateAddressBarWidth();
         _navToolStrip.SizeChanged += (s, e) => UpdateAddressBarWidth();
+
+        // 本家 IE11 のお気に入りセンター初期状態(Bing/Google)を再現
+        AddFavorite("Bing", "https://www.bing.com");
+        AddFavorite("Google", "https://www.google.com");
 
         AddNewTab(HomePage);
     }
@@ -144,7 +164,7 @@ public class MainForm : Form
         {
             new ToolStripMenuItem("Internet Explorer ヘルプ(&H)", null, (s, e) =>
                 MessageBox.Show(this, "ヘルプ コンテンツはこのデモには含まれていません。", "ヘルプ")),
-            new ToolStripMenuItem("Internet Explorerのバージョン情報(&A)", null, (s, e) => ShowAboutDialog()),
+            new ToolStripMenuItem("Internet Explorer について(&A)", null, (s, e) => ShowAboutDialog()),
         });
 
         _menuStrip.Items.AddRange(new ToolStripItem[]
@@ -161,7 +181,7 @@ public class MainForm : Form
             "Microsoft Edge WebView2 (Chromium) を使用しています。\n\n" +
             "見た目は IE11、中身は Chrome 系エンジンという構成の\n" +
             "デモ アプリケーションです。",
-            "Internet Explorerのバージョン情報",
+            "Internet Explorer について",
             MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
@@ -191,6 +211,8 @@ public class MainForm : Form
         var barButton = new ToolStripButton(title) { AutoSize = true, DisplayStyle = ToolStripItemDisplayStyle.Text };
         barButton.Click += (s, e) => Navigate(url);
         _favoritesBar.Items.Add(barButton);
+
+        RefreshFavoritesTree();
     }
 
     // ============================================================
@@ -220,7 +242,7 @@ public class MainForm : Form
         };
 
         _btnGo = CreateGlyphButton("\uE72A", "移動");
-        var btnFavStar = CreateGlyphButton("\uE734", "お気に入りに追加");
+        var btnFavStar = CreateGlyphButton("\uE734", "お気に入り、フィード、履歴の表示");
         var btnTools = CreateGlyphButton("\uE713", "ツール");
 
         _btnBack.Click += (s, e) => GetActiveWebView()?.GoBack();
@@ -229,7 +251,7 @@ public class MainForm : Form
         _btnStop.Click += (s, e) => GetActiveWebView()?.Stop();
         _btnHome.Click += (s, e) => Navigate(HomePage);
         _btnGo.Click += (s, e) => NavigateFromAddressBar();
-        btnFavStar.Click += (s, e) => AddCurrentPageToFavorites();
+        btnFavStar.Click += (s, e) => ToggleFavoritesPanel();
         btnTools.Click += (s, e) => MessageBox.Show(this, "ツール メニューをご利用ください。", "ツール");
 
         _addressBar.KeyDown += (s, e) =>
@@ -285,6 +307,151 @@ public class MainForm : Form
         _favoritesBar.GripStyle = ToolStripGripStyle.Hidden;
         _favoritesBar.RenderMode = ToolStripRenderMode.ManagerRenderMode;
         _favoritesBar.Height = 24;
+    }
+
+    // ============================================================
+    //  お気に入りセンター(左サイドパネル: お気に入り/フィード/履歴)
+    // ============================================================
+    private void ToggleFavoritesPanel()
+    {
+        _favoritesPanel.Visible = !_favoritesPanel.Visible;
+        if (_favoritesPanel.Visible) RefreshFavoritesTree();
+    }
+
+    private void BuildFavoritesCenterPanel()
+    {
+        _favoritesPanel = new Panel
+        {
+            Dock = DockStyle.Left,
+            Width = 260,
+            Visible = false,
+            BackColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle,
+        };
+
+        // 上段: 「お気に入りに追加」ドロップダウン + 閉じるボタン
+        var topStrip = new ToolStrip
+        {
+            GripStyle = ToolStripGripStyle.Hidden,
+            RenderMode = ToolStripRenderMode.ManagerRenderMode,
+            Dock = DockStyle.Top,
+        };
+        var addFavDropDown = new ToolStripDropDownButton("お気に入りに追加")
+        {
+            DisplayStyle = ToolStripItemDisplayStyle.Text,
+        };
+        addFavDropDown.DropDownItems.Add("お気に入りに追加(&A)...", null, (s, e) => AddCurrentPageToFavorites());
+        addFavDropDown.DropDownItems.Add("お気に入りバーに追加(&B)", null, (s, e) => AddCurrentPageToFavorites());
+        var closeBtn = new ToolStripButton("×")
+        {
+            Alignment = ToolStripItemAlignment.Right,
+            DisplayStyle = ToolStripItemDisplayStyle.Text,
+            ToolTipText = "閉じる",
+        };
+        closeBtn.Click += (s, e) => _favoritesPanel.Visible = false;
+        topStrip.Items.Add(addFavDropDown);
+        topStrip.Items.Add(closeBtn);
+
+        // 中段: お気に入り / フィード / 履歴 の擬似タブ
+        var tabStripPanel = new Panel { Dock = DockStyle.Top, Height = 28, BackColor = Color.FromArgb(240, 240, 240) };
+        var tabFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+        _tabFav = CreateFavTabLabel("お気に入り");
+        _tabFeeds = CreateFavTabLabel("フィード");
+        _tabHistory = CreateFavTabLabel("履歴");
+        tabFlow.Controls.AddRange(new Control[] { _tabFav, _tabFeeds, _tabHistory });
+        tabStripPanel.Controls.Add(tabFlow);
+
+        // 下段: コンテンツ(お気に入りツリー/フィード プレースホルダー/履歴リスト)
+        _favoritesTree = new TreeView { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, Visible = true };
+        _favoritesTree.NodeMouseClick += (s, e) =>
+        {
+            if (e.Node?.Tag is string url) Navigate(url);
+        };
+
+        _feedsPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
+        _feedsPanel.Controls.Add(new Label
+        {
+            Text = "このページに登録されているフィードはありません。",
+            Dock = DockStyle.Top,
+            Padding = new Padding(10),
+            AutoSize = false,
+            Height = 60,
+        });
+
+        _historyListBox = new ListBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None };
+        _historyListBox.MouseClick += (s, e) =>
+        {
+            int index = _historyListBox.IndexFromPoint(e.Location);
+            if (index >= 0 && _historyListBox.Items[index] is HistoryEntry entry) Navigate(entry.Url);
+        };
+        _historyPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
+        _historyPanel.Controls.Add(_historyListBox);
+
+        var contentHost = new Panel { Dock = DockStyle.Fill };
+        contentHost.Controls.Add(_favoritesTree);
+        contentHost.Controls.Add(_historyPanel);
+        contentHost.Controls.Add(_feedsPanel);
+
+        _favoritesPanel.Controls.Add(contentHost);
+        _favoritesPanel.Controls.Add(tabStripPanel);
+        _favoritesPanel.Controls.Add(topStrip);
+
+        SelectFavoritesTab(_tabFav);
+        RefreshFavoritesTree();
+    }
+
+    private Label CreateFavTabLabel(string text)
+    {
+        var lbl = new Label
+        {
+            Text = text,
+            AutoSize = false,
+            Width = 84,
+            Height = 26,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Cursor = Cursors.Hand,
+            Font = new Font("Segoe UI", 8.5f),
+            BackColor = Color.FromArgb(240, 240, 240),
+        };
+        lbl.Click += (s, e) => SelectFavoritesTab(lbl);
+        return lbl;
+    }
+
+    private void SelectFavoritesTab(Label selected)
+    {
+        foreach (var lbl in new[] { _tabFav, _tabFeeds, _tabHistory })
+        {
+            bool isSelected = lbl == selected;
+            lbl.BackColor = isSelected ? Color.White : Color.FromArgb(240, 240, 240);
+            lbl.Font = new Font(lbl.Font, isSelected ? FontStyle.Bold : FontStyle.Regular);
+        }
+        _favoritesTree.Visible = selected == _tabFav;
+        _feedsPanel.Visible = selected == _tabFeeds;
+        _historyPanel.Visible = selected == _tabHistory;
+    }
+
+    private void RefreshFavoritesTree()
+    {
+        if (_favoritesTree == null) return;
+        _favoritesTree.Nodes.Clear();
+        // 本家 IE11 のお気に入りセンターに合わせ、Links / リンク フォルダーを先頭に置き、
+        // 追加したお気に入りはその後にフラットな一覧として並べる。
+        _favoritesTree.Nodes.Add(new TreeNode("Links"));
+        _favoritesTree.Nodes.Add(new TreeNode("リンク"));
+        foreach (var fav in _favorites)
+        {
+            _favoritesTree.Nodes.Add(new TreeNode(fav.Title) { Tag = fav.Url });
+        }
+    }
+
+    private void RefreshHistoryList()
+    {
+        if (_historyListBox == null) return;
+        _historyListBox.Items.Clear();
+        foreach (var entry in _history)
+        {
+            _historyListBox.Items.Add(entry);
+        }
     }
 
     // ============================================================
@@ -478,6 +645,16 @@ public class MainForm : Form
             _progressBar.Visible = false;
             _btnStop.Enabled = false;
             UpdateNavButtons(webView);
+        }
+
+        if (webView.Source != null)
+        {
+            var title = string.IsNullOrWhiteSpace(webView.CoreWebView2?.DocumentTitle)
+                ? webView.Source.ToString()
+                : webView.CoreWebView2!.DocumentTitle;
+            _history.Insert(0, new HistoryEntry(title, webView.Source.ToString()));
+            if (_history.Count > 50) _history.RemoveAt(_history.Count - 1);
+            RefreshHistoryList();
         }
     }
 
