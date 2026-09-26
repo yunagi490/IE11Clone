@@ -1,0 +1,77 @@
+## ===== ビルド出力 =====
+[Bb]in/
+[Oo]bj/
+out/
+publish/
+*.pdb
+
+## ===== Visual Studio =====
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+
+## ===== Rider / JetBrains =====
+.idea/
+*.sln.iml
+
+## ===== NuGet =====
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## ===== .NET / MSBuild 追加ファイル =====
+*.dbmdl
+*.jfm
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+*.log
+*.tlog
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+
+## ===== WebView2 (実行時に自動生成されるユーザーデータ) =====
+**/*.WebView2/
+
+## ===== OS 固有 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## ===== エディタの一時ファイル =====
+*.swp
+*~
+
+## ===== git ======
+.github/commit-instructions.md
+
+## ローカル
+memo.md
+Assets/IE.ico
