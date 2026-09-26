@@ -1,10 +1,9 @@
 ## ===== ビルド出力 =====
 [Bb]in/
-[Oo]obj/
+[Oo]bj/
 out/
 publish/
 *.pdb
-obj/
 
 ## ===== Visual Studio =====
 .vs/
