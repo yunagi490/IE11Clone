@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/Test/">
+    <Project Path="Test/IE11Clone.Tests/IE11Clone.Tests.csproj" />
+  </Folder>
+  <Project Path="IE11Clone.csproj" />
+</Solution>

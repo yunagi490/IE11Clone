@@ -49,3 +49,5 @@ G:\Git\IE11Clone\obj\Debug\net8.0-windows\refint\IE11Clone.dll
 G:\Git\IE11Clone\obj\Debug\net8.0-windows\IE11Clone.pdb
 G:\Git\IE11Clone\obj\Debug\net8.0-windows\IE11Clone.genruntimeconfig.cache
 G:\Git\IE11Clone\obj\Debug\net8.0-windows\ref\IE11Clone.dll
+G:\Git\IE11Clone\obj\Debug\net8.0-windows\IE11Clone.gentestingplatformentrypointinputcache.cache
+G:\Git\IE11Clone\obj\Debug\net8.0-windows\IE11Clone.genautoregisteredextensionsinputcache.cache

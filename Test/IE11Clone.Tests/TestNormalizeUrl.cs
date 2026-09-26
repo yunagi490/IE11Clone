@@ -1,4 +1,4 @@
-using IE11Clone;
+﻿using IE11Clone;
 using NUnit.Framework;
 
 namespace IE11Clone.Tests;
